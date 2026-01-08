@@ -22,12 +22,13 @@
 //!     // AuthMethod::with_key(key: &str, passphrase: Option<&str>)
 //!     // if you want to use SSH agent (Unix/Linux only), then use following:
 //!     // AuthMethod::with_agent();
-//!     // You can provide multiple AuthMethod, they will be executed in order.
-//!     let auth_methods = vec![AuthMethod::with_password("root")];
+//!     // You can provide multiple AuthMethod, they will be executed in order :
+//!     // let auth_methods = vec![AuthMethod::with_password("root")];
+//!     let auth_method = AuthMethod::with_password("root");
 //!     let mut client = Client::connect(
 //!         ("10.10.10.2", 22),
 //!         "root",
-//!         auth_methods,
+//!         auth_method,
 //!         ServerCheckMethod::NoCheck,
 //!     ).await?;
 //!
