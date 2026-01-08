@@ -15,6 +15,10 @@ use tokio::sync::mpsc;
 use crate::ToSocketAddrsWithHostname;
 use crate::error::AuthenticationError;
 
+pub trait AuthMethods {
+    fn methods(&self) -> Vec<AuthMethod>;
+}
+
 /// An authentification token.
 ///
 /// Supports password, private key, public key, SSH agent, and keyboard interactive authentication.
@@ -39,6 +43,18 @@ pub enum AuthMethod {
     #[cfg(not(target_os = "windows"))]
     Agent,
     KeyboardInteractive(AuthKeyboardInteractive),
+}
+
+impl AuthMethods for AuthMethod {
+    fn methods(&self) -> Vec<AuthMethod> {
+        vec![self.clone()]
+    }
+}
+
+impl AuthMethods for Vec<AuthMethod> {
+    fn methods(&self) -> Vec<AuthMethod> {
+        self.clone()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,10 +264,10 @@ impl Client {
     pub async fn connect(
         addr: impl ToSocketAddrsWithHostname,
         username: &str,
-        auths: Vec<AuthMethod>,
+        auth: impl AuthMethods,
         server_check: ServerCheckMethod,
     ) -> Result<Self, crate::Error> {
-        Self::connect_with_config(addr, username, auths, server_check, Config::default()).await
+        Self::connect_with_config(addr, username, auth, server_check, Config::default()).await
     }
 
     /// Same as `connect`, but with the option to specify a non default
@@ -259,7 +275,7 @@ impl Client {
     pub async fn connect_with_config(
         addr: impl ToSocketAddrsWithHostname,
         username: &str,
-        auths: Vec<AuthMethod>,
+        auth: impl AuthMethods,
         server_check: ServerCheckMethod,
         config: Config,
     ) -> Result<Self, crate::Error> {
@@ -290,7 +306,7 @@ impl Client {
         let (address, mut handle) = connect_res?;
         let username = username.to_string();
 
-        Self::authenticate(&mut handle, &username, auths).await?;
+        Self::authenticate(&mut handle, &username, auth).await?;
 
         Ok(Self {
             connection_handle: Arc::new(handle),
@@ -303,10 +319,10 @@ impl Client {
     async fn authenticate(
         handle: &mut Handle<ClientHandler>,
         username: &String,
-        auths: Vec<AuthMethod>,
+        auth: impl AuthMethods,
     ) -> Result<(), crate::Error> {
         let mut auth_errors: Vec<AuthenticationError> = Vec::new();
-        for auth in auths {
+        for auth in auth.methods() {
             let auth_error = match auth.clone() {
                 AuthMethod::Password(password) => {
                     Self::auth_password(handle, username, password).await
@@ -1165,7 +1181,7 @@ mod tests {
                 env("ASYNC_SSH2_TEST_HOST_PORT").parse().unwrap(),
             ),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1390,7 +1406,7 @@ mod tests {
         let client = Client::connect(
             &[SocketAddr::from(([127, 0, 0, 1], 23)), test_address()][..],
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1404,7 +1420,7 @@ mod tests {
         let error = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password("hopefully the wrong password")],
+            AuthMethod::with_password("hopefully the wrong password"),
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1433,7 +1449,7 @@ mod tests {
         let no_client = Client::connect(
             "this is definitely not an address",
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password("hopefully the wrong password")],
+            AuthMethod::with_password("hopefully the wrong password"),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1445,7 +1461,7 @@ mod tests {
         let no_client = Client::connect(
             (env("ASYNC_SSH2_TEST_HOST_IP"), 23),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1458,7 +1474,7 @@ mod tests {
         let no_client = Client::connect(
             "172.16.0.6:22",
             "xxx",
-            vec![AuthMethod::with_password("xxx")],
+            AuthMethod::with_password("xxx"),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1470,10 +1486,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_key_file(
-                env("ASYNC_SSH2_TEST_CLIENT_PRIV"),
-                None,
-            )],
+            AuthMethod::with_key_file(env("ASYNC_SSH2_TEST_CLIENT_PRIV"), None),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1488,7 +1501,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_agent()],
+            AuthMethod::with_agent(),
             ServerCheckMethod::NoCheck,
         )
         .await
@@ -1506,7 +1519,7 @@ mod tests {
         let result = Client::connect(
             test_address(),
             "wrong_user_that_does_not_exist",
-            vec![AuthMethod::with_agent()],
+            AuthMethod::with_agent(),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1543,7 +1556,7 @@ mod tests {
         let result = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_agent()],
+            AuthMethod::with_agent(),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1571,10 +1584,10 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_key_file(
+            AuthMethod::with_key_file(
                 env("ASYNC_SSH2_TEST_CLIENT_PROT_PRIV"),
                 Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
-            )],
+            ),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1592,7 +1605,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_key(key.as_str(), None)],
+            AuthMethod::with_key(key.as_str(), None),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1606,10 +1619,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_key(
-                key.as_str(),
-                Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS")),
-            )],
+            AuthMethod::with_key(key.as_str(), Some(&env("ASYNC_SSH2_TEST_CLIENT_PROT_PASS"))),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1621,11 +1631,10 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![
+            AuthMethod::from(
                 AuthKeyboardInteractive::new()
-                    .with_response("Password", env("ASYNC_SSH2_TEST_HOST_PW"))
-                    .into(),
-            ],
+                    .with_response("Password", env("ASYNC_SSH2_TEST_HOST_PW")),
+            ),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1637,11 +1646,10 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![
+            AuthMethod::from(
                 AuthKeyboardInteractive::new()
-                    .with_response_exact("Password: ", env("ASYNC_SSH2_TEST_HOST_PW"))
-                    .into(),
-            ],
+                    .with_response_exact("Password: ", env("ASYNC_SSH2_TEST_HOST_PW")),
+            ),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1653,11 +1661,9 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![
-                AuthKeyboardInteractive::new()
-                    .with_response_exact("Password: ", "wrong password")
-                    .into(),
-            ],
+            AuthMethod::from(
+                AuthKeyboardInteractive::new().with_response_exact("Password: ", "wrong password"),
+            ),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1684,11 +1690,9 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![
-                AuthKeyboardInteractive::new()
-                    .with_response_exact("Password:", "123")
-                    .into(),
-            ],
+            AuthMethod::from(
+                AuthKeyboardInteractive::new().with_response_exact("Password:", "123"),
+            ),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1714,9 +1718,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER_MULTI_AUTH"),
-            vec![AuthMethod::with_password(&env(
-                "ASYNC_SSH2_TEST_HOST_PW_MULTI_AUTH",
-            ))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW_MULTI_AUTH")),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1751,7 +1753,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER_MULTI_AUTH"),
-            vec![AuthMethod::with_key(key.as_str(), None)],
+            AuthMethod::with_key(key.as_str(), None),
             ServerCheckMethod::NoCheck,
         )
         .await;
@@ -1806,7 +1808,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::with_public_key_file(&env("ASYNC_SSH2_TEST_SERVER_PUB")),
         )
         .await;
@@ -1826,7 +1828,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::with_public_key(key),
         )
         .await;
@@ -1838,7 +1840,7 @@ mod tests {
         let client = Client::connect(
             test_address(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
         )
         .await;
@@ -1850,7 +1852,7 @@ mod tests {
         let client = Client::connect(
             test_hostname(),
             &env("ASYNC_SSH2_TEST_HOST_USER"),
-            vec![AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW"))],
+            AuthMethod::with_password(&env("ASYNC_SSH2_TEST_HOST_PW")),
             ServerCheckMethod::with_known_hosts_file(&env("ASYNC_SSH2_TEST_KNOWN_HOSTS")),
         )
         .await;
